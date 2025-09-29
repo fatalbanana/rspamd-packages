@@ -16,12 +16,16 @@
          ]
       },
       "centos-10-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "centos-10",
@@ -45,7 +49,7 @@
                "with": {
                   "name": "centos-10",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.centos-10-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.centos-10-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -86,12 +90,16 @@
          ]
       },
       "centos-8-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "centos-8",
@@ -115,7 +123,7 @@
                "with": {
                   "name": "centos-8",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.centos-8-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.centos-8-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -156,12 +164,16 @@
          ]
       },
       "centos-9-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "centos-9",
@@ -185,7 +197,7 @@
                "with": {
                   "name": "centos-9",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.centos-9-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.centos-9-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -226,12 +238,16 @@
          ]
       },
       "debian-bookworm-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "debian-bookworm",
@@ -255,7 +271,7 @@
                "with": {
                   "name": "debian-bookworm",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.debian-bookworm-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.debian-bookworm-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -296,12 +312,16 @@
          ]
       },
       "debian-bullseye-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "debian-bullseye",
@@ -325,7 +345,7 @@
                "with": {
                   "name": "debian-bullseye",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.debian-bullseye-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.debian-bullseye-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -366,12 +386,16 @@
          ]
       },
       "debian-trixie-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "debian-trixie",
@@ -395,7 +419,7 @@
                "with": {
                   "name": "debian-trixie",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.debian-trixie-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.debian-trixie-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -436,12 +460,16 @@
          ]
       },
       "ubuntu-focal-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "ubuntu-focal",
@@ -465,7 +493,7 @@
                "with": {
                   "name": "ubuntu-focal",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.ubuntu-focal-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.ubuntu-focal-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -506,12 +534,16 @@
          ]
       },
       "ubuntu-jammy-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "ubuntu-jammy",
@@ -535,7 +567,7 @@
                "with": {
                   "name": "ubuntu-jammy",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.ubuntu-jammy-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.ubuntu-jammy-build-ARM64.outputs.revision }}"
                }
             }
          ]
@@ -576,12 +608,16 @@
          ]
       },
       "ubuntu-noble-build-X64": {
+         "outputs": {
+            "revision": "${{ steps.build_packages.outputs.revision }}"
+         },
          "runs-on": "ubuntu-24.04",
          "steps": [
             {
                "uses": "actions/checkout@v4"
             },
             {
+               "id": "build_packages",
                "uses": "./.github/actions/build_packages",
                "with": {
                   "name": "ubuntu-noble",
@@ -605,7 +641,7 @@
                "with": {
                   "name": "ubuntu-noble",
                   "platform": "${{ runner.arch }}",
-                  "revision": "${{ needs.ubuntu-noble-build-X64.outputs.revision }}"
+                  "revision": "${{ needs.ubuntu-noble-build-ARM64.outputs.revision }}"
                }
             }
          ]
