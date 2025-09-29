@@ -1,0 +1,13 @@
+name: release
+on:
+  push:
+    tags:
+      - v[0-9]+.[0-9]+.[0-9]+\+[0-9]+
+
+concurrency:
+  cancel-in-progress: false
+  group: rspamd-packages-release
+
+jobs:
+  build_test_release:
+    uses: ./.github/workflows/build_test_release.yml
