@@ -13,74 +13,34 @@ local build_test_release_pipeline = {
 };
 
 local platform_jobs(name, image) = {
-  local build_with = {
+  local build_with(arch) = {
     name: name,
     nightly: '${{ inputs.nightly }}',
+    platform: arch,
   },
   local test_with(arch) = {
     name: name,
-    platform: '${{ runner.arch }}',
+    image: image,
+    platform: arch,
     revision: '${{ needs.' + name + '-build-' + arch + '.outputs.revision }}',
   },
   [name + '-build-X64']: {
-    'runs-on': 'ubuntu-24.04',
-    'outputs': {
-      revision: '${{ steps.build_packages.outputs.revision }}',
-    },
-    steps: [
-      {
-        uses: 'actions/checkout@v4',
-      },
-      {
-        id: 'build_packages',
-        uses: './.github/actions/build_packages',
-        with: build_with,
-      },
-    ],
+    uses: './.github/workflows/build_packages.yml',
+    with: build_with('X64'),
   },
   [name + '-build-ARM64']: {
-    'runs-on': 'ubuntu-24.04-arm',
-    steps: [
-      {
-        uses: 'actions/checkout@v4',
-      },
-      {
-        uses: './.github/actions/build_packages',
-        with: build_with,
-      },
-    ],
+    uses: './.github/workflows/build_packages.yml',
+    with: build_with('ARM64'),
   },
   [name + '-test-X64']: {
-    container: {
-      image: image,
-    },
     needs: name + '-build-X64',
-    'runs-on': 'ubuntu-24.04',
-    steps: [
-      {
-        uses: 'actions/checkout@v4',
-      },
-      {
-        uses: './.github/actions/test_package',
-        with: test_with('X64'),
-      },
-    ],
+    uses: './.github/workflows/test_package.yml',
+    with: test_with('X64'),
   },
   [name + '-test-ARM64']: {
-    container: {
-      image: image,
-    },
     needs: name + '-build-ARM64',
-    'runs-on': 'ubuntu-24.04-arm',
-    steps: [
-      {
-        uses: 'actions/checkout@v4',
-      },
-      {
-        uses: './.github/actions/test_package',
-        with: test_with('ARM64'),
-      },
-    ],
+    uses: './.github/workflows/test_package.yml',
+    with: test_with('ARM64'),
   },
 };
 
