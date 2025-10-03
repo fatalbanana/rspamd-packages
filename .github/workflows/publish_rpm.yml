@@ -1,0 +1,19 @@
+name: Publish package (RPM)
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+        description: 'The target OS/distro name to publish (e.g., ubuntu-jammy, centos-9)'
+
+jobs:
+  test:
+    name: 'publish (${{ inputs.name }})'
+    runs-on: 'ubuntu-24.04'
+
+    steps:
+      - name: Download package
+        run: |
+          echo FIXME
