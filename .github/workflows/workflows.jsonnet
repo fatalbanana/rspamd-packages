@@ -58,6 +58,7 @@ local build_test_jobs(name, image) = {
     skip_tests: '${{ vars.SKIP_TESTS || vars.SKIP_TESTS_' + std.asciiUpper(std.strReplace(name, '-', '_')) + ' }}',
   },
   [name + '-test-' + arch]: {
+    'if': '${{ !vars.SKIP_PUBLISH && !vars.SKIP_TEST }}',
     needs: name + '-build-' + arch,
     uses: './.github/workflows/test_package.yml',
     with: test_with(arch),
@@ -76,8 +77,10 @@ local publish_debian = {
     'if': '${{ !vars.SKIP_PUBLISH }}',
     needs: distribs_deb_test,
     uses: './.github/workflows/publish_deb.yml',
+    secrets: 'inherit',
     with: {
       names: std.join(',', distribs_deb),
+      nightly: '${{ inputs.nightly }}',
     },
   },
 };
@@ -89,7 +92,9 @@ local publish_rpm(name) = {
     uses: './.github/workflows/publish_rpm.yml',
     with: {
       name: name,
+      nightly: '${{ inputs.nightly }}',
     },
+    secrets: 'inherit',
   },
 };
 

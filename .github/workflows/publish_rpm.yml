@@ -6,14 +6,270 @@ on:
       name:
         required: true
         type: string
-        description: 'The target OS/distro name to publish (e.g., ubuntu-jammy, centos-9)'
+        description: 'The target OS/distro name to publish (e.g., centos-9)'
+      nightly:
+        required: false
+        type: string
+        description: 'Set to any value to enable nightly (unstable) publish logic.'
 
 jobs:
-  test:
+  publish:
     name: 'publish (${{ inputs.name }})'
     runs-on: 'ubuntu-24.04'
 
     steps:
-      - name: Download package
+      - name: Install dependencies
+        shell: bash
         run: |
-          echo FIXME
+          sudo apt-get update
+          sudo apt-get install -y rpm createrepo-c gnupg rsync expect
+
+      - name: Prepare GPG
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          # Import private key, handling raw, escaped \n, or base64-encoded formats
+          if [[ -z "${GPG_PRIVATE_KEY:-}" ]]; then
+            echo "GPG_PRIVATE_KEY is empty or not set" >&2
+            exit 1
+          fi
+          KEY_TMP="$RUNNER_TEMP/privkey.asc"
+          rm -f "$KEY_TMP"
+          # Try direct content first
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$KEY_TMP"
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            # Try un-escaping literal \n sequences
+            printf '%b' "${GPG_PRIVATE_KEY//\\n/$'\n'}" > "$KEY_TMP"
+          fi
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            # Try base64 decoding to ASCII-armored key
+            echo "$GPG_PRIVATE_KEY" | base64 -d > "$KEY_TMP" 2>/dev/null || true
+          fi
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            echo "Failed to reconstruct OpenPGP private key from secret" >&2
+            exit 1
+          fi
+          gpg --batch --import "$KEY_TMP"
+          rm -f "$KEY_TMP"
+          KEY_FPR=${GPG_KEY_ID}
+          if [[ -z "${KEY_FPR}" ]]; then
+            KEY_FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          fi
+          echo "KEY_FPR=${KEY_FPR}" >> "$GITHUB_ENV"
+          # Ensure loopback pinentry is allowed for non-interactive gpg
+          {
+            echo "use-agent"
+            echo "pinentry-mode loopback"
+          } >> "$HOME/.gnupg/gpg.conf"
+          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          {
+            echo "%_signature gpg"
+            echo "%_gpg_name ${KEY_FPR}"
+            echo "%_gpg_path $HOME/.gnupg"
+            echo "%__gpg /usr/bin/gpg"
+            echo "%__gpg_sign_cmd %{__gpg} gpg --batch --yes --pinentry-mode loopback --detach-sign --local-user ${KEY_FPR} --output %{__signature_filename} %{__plaintext_filename}"
+          } >> "$HOME/.rpmmacros"
+
+          # Restart agent to apply settings and prime with passphrase
+          gpg-connect-agent reloadagent /bye
+          echo "${GPG_PASSPHRASE}" | gpg --pinentry-mode loopback --passphrase-fd 0 -u "$KEY_FPR" --batch --sign -o /dev/null /dev/null
+
+      - name: Download all package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-centos-*
+          path: packages
+          merge-multiple: true
+
+      - name: Inspect
+        run: ls -lR packages
+
+      - name: Prepare repo and sign RPMs
+        shell: bash
+        env:
+          KEEP_BUILDS: ${{ vars.KEEP_BUILDS || '10' }}
+          NIGHTLY: ${{ inputs.nightly }}
+          TARGET_RPM_STABLE: ${{ vars.TARGET_RPM_STABLE || 'rpm-stable' }}
+          TARGET_RPM_UNSTABLE: ${{ vars.TARGET_RPM_UNSTABLE || 'rpm' }}
+          UPLOAD_HOST: ${{ secrets.UPLOAD_HOST }}
+          UPLOAD_HOST_KNOWN_HOSTS: ${{ vars.UPLOAD_HOST_KNOWN_HOSTS }}
+          UPLOAD_SUFFIX: ${{ vars.UPLOAD_SUFFIX || 'rspamd.com/dist/' }}
+        run: |
+          set -x
+          set -euo pipefail
+          DIST="${{ inputs.name }}"
+          REPO_DIR="$GITHUB_WORKSPACE/rpm/$DIST"
+          mkdir -p "$REPO_DIR/x86_64" "$REPO_DIR/aarch64"
+
+          # Prefill: fetch existing latest RPMs from remote to retain previous builds in index
+          if [[ -n "${NIGHTLY:-}" ]]; then
+            TARGET_PATH="$TARGET_RPM_UNSTABLE/${{ inputs.name }}"
+            RSYNC_KEY='${{ secrets.SSH_KEY_RPM_UNSTABLE }}'
+          else
+            TARGET_PATH="$TARGET_RPM_STABLE/${{ inputs.name }}"
+            RSYNC_KEY='${{ secrets.SSH_KEY_RPM_STABLE }}'
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          KEYFILE="$HOME/.ssh/gh_publish_key"
+          echo "$RSYNC_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
+            exit 1
+          fi
+          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          SSH_CMD="ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          # Only prefill top-level RPMs for each arch; skip repodata and any archive directory
+          rsync -e "$SSH_CMD" -ru --ignore-existing \
+            --include 'x86_64/*.rpm' --include 'aarch64/*.rpm' --exclude '*' \
+            "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/" "$REPO_DIR/" || true
+
+          # Copy built artifacts into arch dirs and record newly added files for signing
+          shopt -s nullglob
+          COPIED_FILES=()
+          for rpm in "$GITHUB_WORKSPACE/packages/$DIST/"*x86_64.rpm; do
+            cp -f "$rpm" "$REPO_DIR/x86_64/"
+            COPIED_FILES+=("$REPO_DIR/x86_64/$(basename "$rpm")")
+          done
+          for rpm in "$GITHUB_WORKSPACE/packages/$DIST/"*aarch64.rpm; do
+            cp -f "$rpm" "$REPO_DIR/aarch64/"
+            COPIED_FILES+=("$REPO_DIR/aarch64/$(basename "$rpm")")
+          done
+
+          # Sign only the newly added RPMs to avoid re-signing existing ones
+          for file in "${COPIED_FILES[@]}"; do
+            [[ -f "$file" ]] || continue
+            rpm --addsign "$file"
+          done
+
+          # Retention: keep only the latest N builds (by build time) in index; move older to archive/
+          keep_count="${KEEP_BUILDS:-10}"
+          if [[ "$keep_count" =~ ^[0-9]+$ ]] && (( keep_count > 0 )); then
+            for arch in x86_64 aarch64; do
+              mkdir -p "$REPO_DIR/$arch/archive"
+              # Build map EVR -> max buildtime
+              declare -A evr_btime=()
+              while IFS= read -r -d '' file; do
+                evr=$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}\n' "$file" 2>/dev/null || echo '')
+                btime=$(rpm -qp --qf '%{BUILDTIME}\n' "$file" 2>/dev/null || echo '0')
+                [[ -n "$evr" ]] || continue
+                if [[ -z "${evr_btime[$evr]:-}" || ${evr_btime[$evr]} -lt $btime ]]; then
+                  evr_btime[$evr]=$btime
+                fi
+              done < <(find "$REPO_DIR/$arch" -maxdepth 1 -type f -name '*.rpm' -print0)
+              # Sort EVRs by buildtime desc and select keep list
+              mapfile -t sorted < <(for k in "${!evr_btime[@]}"; do echo "${evr_btime[$k]} $k"; done | sort -nr | awk '{print $2}')
+              keep_evrs=("${sorted[@]:0:$keep_count}")
+              declare -A keep_map=()
+              for ev in "${keep_evrs[@]}"; do keep_map[$ev]=1; done
+              # Move older RPMs to archive
+              while IFS= read -r -d '' file; do
+                evr=$(rpm -qp --qf '%{EPOCHNUM}:%{VERSION}-%{RELEASE}\n' "$file" 2>/dev/null || echo '')
+                [[ -n "$evr" ]] || continue
+                if [[ -z "${keep_map[$evr]:-}" ]]; then
+                  mv -f "$file" "$REPO_DIR/$arch/archive/" || true
+                fi
+              done < <(find "$REPO_DIR/$arch" -maxdepth 1 -type f -name '*.rpm' -print0)
+            done
+          fi
+
+          # Create repo metadata and sign it for each arch present
+          for arch in x86_64 aarch64; do
+            if compgen -G "$REPO_DIR/$arch/*.rpm" > /dev/null; then
+              (cd "$REPO_DIR/$arch" && createrepo_c --compress-type gz .)
+              gpg --default-key "$KEY_FPR" --detach-sign --armor "$REPO_DIR/$arch/repodata/repomd.xml"
+            fi
+          done
+
+          # Write repo file for clients (avoid YAML/heredoc indentation pitfalls)
+          if [[ -n "${NIGHTLY:-}" ]]; then
+            {
+              printf '%s\n' "[rspamd-experimental]"
+              printf '%s\n' "name=Rspamd experimental repository"
+              printf '%s\n' 'baseurl=http://rspamd.com/rpm/$DIST/$basearch'
+              printf '%s\n' "enabled=1"
+              printf '%s\n' "gpgcheck=1"
+              printf '%s\n' "repo_gpgcheck=1"
+              printf '%s\n' "gpgkey=http://rspamd.com/rpm/rspamd.asc"
+            } > "$REPO_DIR/rspamd-experimental.repo"
+          else
+            {
+              printf '%s\n' "[rspamd]"
+              printf '%s\n' "name=Rspamd stable repository"
+              printf '%s\n' 'baseurl=http://rspamd.com/rpm-stable/$DIST/$basearch'
+              printf '%s\n' "enabled=1"
+              printf '%s\n' "gpgcheck=1"
+              printf '%s\n' "repo_gpgcheck=1"
+              printf '%s\n' "gpgkey=http://rspamd.com/rpm/rspamd.asc"
+            } > "$REPO_DIR/rspamd.repo"
+          fi
+
+          # Export public key for clients
+          mkdir -p "$GITHUB_WORKSPACE/rpm"
+          gpg --armor --output "$GITHUB_WORKSPACE/rpm/rspamd.asc" --export "$KEY_FPR"
+
+      - name: Upload repo via rsync
+        shell: bash
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+          UPLOAD_HOST: ${{ secrets.UPLOAD_HOST }}
+          UPLOAD_SUFFIX: ${{ vars.UPLOAD_SUFFIX || 'rspamd.com/dist/' }}
+          TARGET_RPM_STABLE: ${{ vars.TARGET_RPM_STABLE || 'rpm-stable' }}
+          TARGET_RPM_UNSTABLE: ${{ vars.TARGET_RPM_UNSTABLE || 'rpm' }}
+          UPLOAD_HOST_KNOWN_HOSTS: ${{ vars.UPLOAD_HOST_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${NIGHTLY:-}" ]]; then
+            TARGET_PATH="$TARGET_RPM_UNSTABLE/${{ inputs.name }}"
+            RSYNC_KEY='${{ secrets.SSH_KEY_RPM_UNSTABLE }}'
+          else
+            TARGET_PATH="$TARGET_RPM_STABLE/${{ inputs.name }}"
+            RSYNC_KEY='${{ secrets.SSH_KEY_RPM_STABLE }}'
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          KEYFILE="$HOME/.ssh/gh_publish_key"
+          echo "$RSYNC_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          RSYNC_ARGS="-ru"
+          # Do not upload archived RPMs
+          RSYNC_ARGS="$RSYNC_ARGS --exclude archive/**"
+          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
+            exit 1
+          fi
+          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          rsync -e "ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" $RSYNC_ARGS \
+            "$GITHUB_WORKSPACE/rpm/${{ inputs.name }}/" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/"
+
+      - name: Upload public key to rpm roots
+        shell: bash
+        env:
+          TARGET_RPM_STABLE: ${{ vars.TARGET_RPM_STABLE || 'rpm-stable' }}
+          TARGET_RPM_UNSTABLE: ${{ vars.TARGET_RPM_UNSTABLE || 'rpm' }}
+          UPLOAD_HOST: ${{ secrets.UPLOAD_HOST }}
+          UPLOAD_HOST_KNOWN_HOSTS: ${{ vars.UPLOAD_HOST_KNOWN_HOSTS }}
+          UPLOAD_SUFFIX: ${{ vars.UPLOAD_SUFFIX || 'rspamd.com/dist/' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          KEYFILE="$HOME/.ssh/gh_publish_key"
+          echo "${{ secrets.SSH_KEY_RPM_UNSTABLE }}" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
+            exit 1
+          fi
+          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          rsync -e "ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" -ru \
+            "$GITHUB_WORKSPACE/rpm/rspamd.asc" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_RPM_UNSTABLE}"
+          rsync -e "ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" -ru \
+            "$GITHUB_WORKSPACE/rpm/rspamd.asc" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_RPM_STABLE}"

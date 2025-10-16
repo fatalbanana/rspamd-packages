@@ -6,14 +6,303 @@ on:
       names:
         required: true
         type: string
-        description: 'The target distro names to publish (e.g. debian-trixie,debian-bookworm)'
+        description: 'Comma-separated target distro names (e.g., debian-trixie,debian-bookworm)'
+      nightly:
+        required: false
+        type: string
+        description: 'Set to any value to enable nightly (unstable) publish logic.'
 
 jobs:
-  test:
+  publish:
     name: 'publish (debian)'
     runs-on: 'ubuntu-24.04'
 
     steps:
-      - name: Download package
+      - name: Install dependencies
+        shell: bash
         run: |
-          echo FIXME
+          sudo apt-get update
+          sudo apt-get install -y debdelta devscripts gnupg reprepro rsync
+
+      - name: Prepare GPG
+        shell: bash
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEY_ID: ${{ vars.GPG_KEY_ID }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.gnupg"
+          chmod 700 "$HOME/.gnupg"
+          # Import private key, handling raw, escaped \n, or base64-encoded formats
+          if [[ -z "${GPG_PRIVATE_KEY:-}" ]]; then
+            echo "GPG_PRIVATE_KEY is empty or not set" >&2
+            exit 1
+          fi
+          KEY_TMP="$RUNNER_TEMP/privkey.asc"
+          rm -f "$KEY_TMP"
+          # Try direct content first
+          printf '%s\n' "$GPG_PRIVATE_KEY" > "$KEY_TMP"
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            # Try un-escaping literal \n sequences
+            printf '%b' "${GPG_PRIVATE_KEY//\\n/$'\n'}" > "$KEY_TMP"
+          fi
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            # Try base64 decoding to ASCII-armored key
+            echo "$GPG_PRIVATE_KEY" | base64 -d > "$KEY_TMP" 2>/dev/null || true
+          fi
+          if ! grep -q "BEGIN PGP" "$KEY_TMP"; then
+            echo "Failed to reconstruct OpenPGP private key from secret" >&2
+            exit 1
+          fi
+          gpg --batch --import "$KEY_TMP"
+          rm -f "$KEY_TMP"
+          KEY_FPR=${GPG_KEY_ID}
+          if [[ -z "${KEY_FPR}" ]]; then
+            KEY_FPR=$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')
+          fi
+          echo "KEY_FPR=${KEY_FPR}" >> "$GITHUB_ENV"
+          # Configure loopback pinentry for non-interactive signing
+          {
+            echo "use-agent"
+            echo "pinentry-mode loopback"
+          } >> "$HOME/.gnupg/gpg.conf"
+          echo "allow-loopback-pinentry" >> "$HOME/.gnupg/gpg-agent.conf"
+          # Restart agent to apply settings and prime with passphrase
+          gpg-connect-agent reloadagent /bye
+          echo "${GPG_PASSPHRASE}" | gpg --pinentry-mode loopback --passphrase-fd 0 -u "$KEY_FPR" --batch --sign -o /dev/null /dev/null
+
+      - name: Download all debian package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-debian-*
+          path: packages
+          merge-multiple: true
+
+      - name: Download all ubuntu package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: packages-ubuntu-*
+          path: packages
+          merge-multiple: true
+
+      - name: Inspect
+        run: ls -lR packages
+
+      - name: Build and sign APT repository
+        shell: bash
+        env:
+          NIGHTLY: ${{ inputs.nightly }}
+          UPLOAD_HOST: ${{ secrets.UPLOAD_HOST }}
+          UPLOAD_SUFFIX: ${{ vars.UPLOAD_SUFFIX || 'rspamd.com/dist/' }}
+          TARGET_DEB_STABLE: ${{ vars.TARGET_DEB_STABLE || 'apt-stable' }}
+          TARGET_DEB_UNSTABLE: ${{ vars.TARGET_DEB_UNSTABLE || 'apt' }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          KEEP_BUILDS: ${{ vars.KEEP_BUILDS || '10' }}
+          UPLOAD_HOST_KNOWN_HOSTS: ${{ vars.UPLOAD_HOST_KNOWN_HOSTS }}
+        run: |
+          set -x
+          set -euo pipefail
+          REPO_DIR="$GITHUB_WORKSPACE/repos"
+          mkdir -p "$REPO_DIR/conf"
+          # Export public key for clients
+          gpg --armor --output "$REPO_DIR/rspamd.asc" --export "$KEY_FPR"
+
+          # Optionally prefill with existing repo content, but only indices and currently referenced pool files
+          if [[ -n "${NIGHTLY:-}" ]]; then
+            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_UNSTABLE }}'
+            TARGET_PATH="$TARGET_DEB_UNSTABLE"
+          else
+            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_STABLE }}'
+            TARGET_PATH="$TARGET_DEB_STABLE"
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          KEYFILE="$HOME/.ssh/gh_publish_key"
+          echo "$RSYNC_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
+            exit 1
+          fi
+          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          SSH_CMD="ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          # Prefill indices and top-level artifacts only
+          rsync -e "$SSH_CMD" -ru --ignore-existing --include 'dists/***' --include 'rspamd.asc' --exclude '*' \
+            "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/" "$REPO_DIR/" || true
+          # Build list of referenced pool files from downloaded indices
+          PREFILL_LIST="$RUNNER_TEMP/prefill_list.txt"
+          : > "$PREFILL_LIST"
+          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages" > /dev/null; then
+            grep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages | awk '{print $2}' | sort -u >> "$PREFILL_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages.gz" > /dev/null; then
+            zgrep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages.gz | awk '{print $2}' | sort -u >> "$PREFILL_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/source/Sources" > /dev/null; then
+            awk 'BEGIN{infiles=0} /^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' \
+              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$PREFILL_LIST" || true
+            awk 'BEGIN{insha=0} /^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' \
+              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$PREFILL_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/source/Sources.gz" > /dev/null; then
+            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
+              awk 'BEGIN{infiles=0} /^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' | sort -u >> "$PREFILL_LIST" || true
+            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
+              awk 'BEGIN{insha=0} /^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' | sort -u >> "$PREFILL_LIST" || true
+          fi
+          if [[ -s "$PREFILL_LIST" ]]; then
+            rsync -e "$SSH_CMD" -ru --ignore-existing --files-from="$PREFILL_LIST" \
+              "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/" "$REPO_DIR/" || true
+          fi
+
+          # Prepare distributions and include packages
+          IFS=',' read -ra DIST_LIST <<< "${{ inputs.names }}"
+          for d in "${DIST_LIST[@]}"; do
+            codename="${d/ubuntu-/}"
+            codename="${codename/debian-/}"
+            ARCHS="source amd64"
+            # Check for ARM64 artifacts by filename in the distro output folder
+            if compgen -G "$GITHUB_WORKSPACE/packages/${d}/*arm64*.deb" > /dev/null; then
+              ARCHS="$ARCHS arm64"
+            fi
+            if [[ -n "${NIGHTLY:-}" ]]; then
+              desc="Apt repository for rspamd nightly builds"
+            else
+              desc="Apt repository for rspamd stable builds"
+            fi
+            {
+              printf '%s\n' "Origin: Rspamd"
+              printf '%s\n' "Label: Rspamd"
+              printf '%s\n' "Codename: ${codename}"
+              printf '%s\n' "Architectures: ${ARCHS}"
+              printf '%s\n' "Components: main"
+              printf '%s\n' "Description: ${desc}"
+              printf '%s\n' "SignWith: ${KEY_FPR}"
+              printf '\n'
+            } >> "$REPO_DIR/conf/distributions"
+            shopt -s nullglob
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*amd64*.deb; do
+              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-dbg_*amd64*.deb; do
+              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan_*amd64*.deb; do
+              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan-dbg_*amd64*.deb; do
+              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            # Include source
+            for deb_dsc in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*.dsc; do
+              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedsc "$codename" "$deb_dsc" || true
+            done
+            # Also include arm64 variants if present
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*arm64*.deb; do
+              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-dbg_*arm64*.deb; do
+              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan_*arm64*.deb; do
+              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan-dbg_*arm64*.deb; do
+              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
+            done
+
+            # Retention: keep only the last N builds (by version) in indexes
+            keep_count="${KEEP_BUILDS:-10}"
+            if [[ "$keep_count" =~ ^[0-9]+$ ]] && (( keep_count > 0 )); then
+              mapfile -t all_versions < <(reprepro -b "$REPO_DIR" list "$codename" rspamd | awk '{print $NF}' | sort -u)
+              if (( ${#all_versions[@]} > keep_count )); then
+                versions_sorted=()
+                for v in "${all_versions[@]}"; do
+                  inserted=0
+                  for i in "${!versions_sorted[@]}"; do
+                    if dpkg --compare-versions "$v" gt "${versions_sorted[$i]}"; then
+                      versions_sorted=("${versions_sorted[@]:0:$i}" "$v" "${versions_sorted[@]:$i}")
+                      inserted=1
+                      break
+                    fi
+                  done
+                  if [[ $inserted -eq 0 ]]; then
+                    versions_sorted+=("$v")
+                  fi
+                done
+                keep_versions=("${versions_sorted[@]:0:$keep_count}")
+                declare -A keep_map
+                for kv in "${keep_versions[@]}"; do keep_map["$kv"]=1; done
+                mapfile -t pkgs < <(reprepro -b "$REPO_DIR" list "$codename" | sed -E 's/.*: ([^ ]+) .*/\1/' | grep '^rspamd' | sort -u)
+                for pkg in "${pkgs[@]}"; do
+                  mapfile -t pkg_versions < <(reprepro -b "$REPO_DIR" list "$codename" "$pkg" | awk '{print $NF}' | sort -u)
+                  for ver in "${pkg_versions[@]}"; do
+                    if [[ -z "${keep_map[$ver]:-}" ]]; then
+                      reprepro -b "$REPO_DIR" --keepunreferencedfiles removematched "$codename" "Package (== $pkg), Version (== $ver)" || true
+                    fi
+                  done
+                done
+                # Refresh indices after pruning
+                reprepro -b "$REPO_DIR" export "$codename"
+              fi
+            fi
+          done
+
+          # Build a minimal staging directory containing only indexed files to reduce upload size
+          STAGING_DIR="$GITHUB_WORKSPACE/repos_staging"
+          rm -rf "$STAGING_DIR"
+          mkdir -p "$STAGING_DIR"
+          # Copy indices and top-level artifacts
+          rsync -a "$REPO_DIR/dists/" "$STAGING_DIR/dists/" || true
+          if [[ -f "$REPO_DIR/rspamd.asc" ]]; then cp -f "$REPO_DIR/rspamd.asc" "$STAGING_DIR/"; fi
+          # Collect referenced files from indices
+          REFERENCED_LIST="$RUNNER_TEMP/referenced_list.txt"
+          : > "$REFERENCED_LIST"
+          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages" > /dev/null; then
+            grep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages | awk '{print $2}' | sort -u >> "$REFERENCED_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages.gz" > /dev/null; then
+            zgrep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages.gz | awk '{print $2}' | sort -u >> "$REFERENCED_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/source/Sources" > /dev/null; then
+            awk '/^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' \
+              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$REFERENCED_LIST" || true
+            awk '/^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' \
+              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$REFERENCED_LIST" || true
+          fi
+          if compgen -G "$REPO_DIR/dists/*/*/source/Sources.gz" > /dev/null; then
+            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
+              awk '/^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' | sort -u >> "$REFERENCED_LIST" || true
+            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
+              awk '/^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' | sort -u >> "$REFERENCED_LIST" || true
+          fi
+          # Copy referenced pool files into staging
+          while IFS= read -r rel; do
+            src="$REPO_DIR/$rel"
+            dest="$STAGING_DIR/$rel"
+            mkdir -p "$(dirname "$dest")"
+            if [[ -f "$src" ]]; then cp -f "$src" "$dest"; fi
+          done < "$REFERENCED_LIST"
+
+          # Upload repo
+          if [[ -n "${NIGHTLY:-}" ]]; then
+            TARGET_PATH="$TARGET_DEB_UNSTABLE"
+            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_UNSTABLE }}'
+          else
+            TARGET_PATH="$TARGET_DEB_STABLE"
+            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_STABLE }}'
+          fi
+          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+          KEYFILE="$HOME/.ssh/gh_publish_key"
+          echo "$RSYNC_KEY" > "$KEYFILE"
+          chmod 600 "$KEYFILE"
+          RSYNC_ARGS="-ru"
+          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
+            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
+            exit 1
+          fi
+          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 644 "$HOME/.ssh/known_hosts"
+          rsync -e "ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" $RSYNC_ARGS \
+            "$STAGING_DIR/" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}"
