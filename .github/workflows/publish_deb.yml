@@ -12,17 +12,34 @@ on:
         type: string
         description: 'Set to any value to enable nightly (unstable) publish logic.'
 
+concurrency:
+  group: debian-publishing-${{ inputs.nightly && 'nightly' || 'stable' }}
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: 'publish (debian)'
     runs-on: 'ubuntu-24.04'
 
     steps:
-      - name: Install dependencies
-        shell: bash
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build aptly from source
         run: |
-          sudo apt-get update
-          sudo apt-get install -y debdelta devscripts gnupg reprepro rsync
+          # Get latest release tag
+          APTLY_VERSION=$(curl -s https://api.github.com/repos/aptly-dev/aptly/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+          echo "Installing aptly ${APTLY_VERSION}"
+          
+          git clone --depth 1 --branch "${APTLY_VERSION}" https://github.com/aptly-dev/aptly.git /tmp/aptly
+          cd /tmp/aptly
+          make install
+          aptly version
 
       - name: Prepare GPG
         shell: bash
@@ -86,11 +103,8 @@ jobs:
           path: packages
           merge-multiple: true
 
-      - name: Inspect
-        run: ls -lR packages
 
-      - name: Build and sign APT repository
-        shell: bash
+      - name: Build and publish APT repository with aptly
         env:
           NIGHTLY: ${{ inputs.nightly }}
           UPLOAD_HOST: ${{ secrets.UPLOAD_HOST }}
@@ -100,209 +114,136 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
           KEEP_BUILDS: ${{ vars.KEEP_BUILDS || '10' }}
           UPLOAD_HOST_KNOWN_HOSTS: ${{ vars.UPLOAD_HOST_KNOWN_HOSTS }}
+          DIST_NAMES: ${{ inputs.names }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          APT_REPO_URL: ${{ vars.APT_REPO_URL_STABLE || 'https://rspamd.com/apt-stable/' }}
         run: |
           set -x
           set -euo pipefail
-          REPO_DIR="$GITHUB_WORKSPACE/repos"
-          mkdir -p "$REPO_DIR/conf"
-          # Export public key for clients
-          gpg --armor --output "$REPO_DIR/rspamd.asc" --export "$KEY_FPR"
-
-          # Optionally prefill with existing repo content, but only indices and currently referenced pool files
+          
+          # Determine target path and repo URL
           if [[ -n "${NIGHTLY:-}" ]]; then
-            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_UNSTABLE }}'
             TARGET_PATH="$TARGET_DEB_UNSTABLE"
+            SSH_KEY='${{ secrets.SSH_KEY_DEB_UNSTABLE }}'
+            APT_URL="${{ vars.APT_REPO_URL_UNSTABLE || 'https://rspamd.com/apt/' }}"
           else
-            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_STABLE }}'
             TARGET_PATH="$TARGET_DEB_STABLE"
+            SSH_KEY='${{ secrets.SSH_KEY_DEB_STABLE }}'
+            APT_URL="${APT_REPO_URL}"
           fi
-          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-          KEYFILE="$HOME/.ssh/gh_publish_key"
-          echo "$RSYNC_KEY" > "$KEYFILE"
-          chmod 600 "$KEYFILE"
-          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
-            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
-            exit 1
-          fi
-          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 644 "$HOME/.ssh/known_hosts"
-          SSH_CMD="ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
-          # Prefill indices and top-level artifacts only
-          rsync -e "$SSH_CMD" -ru --ignore-existing --include 'dists/***' --include 'rspamd.asc' --exclude '*' \
-            "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/" "$REPO_DIR/" || true
-          # Build list of referenced pool files from downloaded indices
-          PREFILL_LIST="$RUNNER_TEMP/prefill_list.txt"
-          : > "$PREFILL_LIST"
-          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages" > /dev/null; then
-            grep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages | awk '{print $2}' | sort -u >> "$PREFILL_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages.gz" > /dev/null; then
-            zgrep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages.gz | awk '{print $2}' | sort -u >> "$PREFILL_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/source/Sources" > /dev/null; then
-            awk 'BEGIN{infiles=0} /^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' \
-              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$PREFILL_LIST" || true
-            awk 'BEGIN{insha=0} /^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' \
-              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$PREFILL_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/source/Sources.gz" > /dev/null; then
-            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
-              awk 'BEGIN{infiles=0} /^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' | sort -u >> "$PREFILL_LIST" || true
-            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
-              awk 'BEGIN{insha=0} /^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' | sort -u >> "$PREFILL_LIST" || true
-          fi
-          if [[ -s "$PREFILL_LIST" ]]; then
-            rsync -e "$SSH_CMD" -ru --ignore-existing --files-from="$PREFILL_LIST" \
-              "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/" "$REPO_DIR/" || true
-          fi
-
-          # Prepare distributions and include packages
-          IFS=',' read -ra DIST_LIST <<< "${{ inputs.names }}"
+          
+          # Setup SSH
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "$UPLOAD_HOST_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          
+          # Configure aptly
+          APTLY_ROOT="$HOME/.aptly"
+          mkdir -p "$APTLY_ROOT"
+          cat > ~/.aptly.conf << 'EOF'
+          {
+            "downloadConcurrency": 4,
+            "architectures": [],
+            "dependencyFollowSuggests": false,
+            "dependencyFollowRecommends": false,
+            "gpgDisableSign": false,
+            "gpgDisableVerify": false,
+            "downloadSourcePackages": false,
+            "skipLegacyPool": true,
+            "ppaDistributorID": "rspamd",
+            "skipContentsPublishing": false
+          }
+          EOF
+          
+          # Mirror existing published repositories from public URL
+          # This allows us to work with existing packages without maintaining database state
+          IFS=',' read -ra DIST_LIST <<< "$DIST_NAMES"
           for d in "${DIST_LIST[@]}"; do
             codename="${d/ubuntu-/}"
             codename="${codename/debian-/}"
-            ARCHS="source amd64"
-            # Check for ARM64 artifacts by filename in the distro output folder
-            if compgen -G "$GITHUB_WORKSPACE/packages/${d}/*arm64*.deb" > /dev/null; then
-              ARCHS="$ARCHS arm64"
-            fi
-            if [[ -n "${NIGHTLY:-}" ]]; then
-              desc="Apt repository for rspamd nightly builds"
+            MIRROR_NAME="rspamd-${codename}-mirror"
+            REPO_NAME="rspamd-${codename}"
+            
+            # Try to create mirror from existing published repo
+            echo "Attempting to mirror existing repository for ${codename}..."
+            if curl -sf "${APT_URL}dists/${codename}/Release" >/dev/null 2>&1; then
+              aptly mirror create -ignore-signatures "$MIRROR_NAME" "$APT_URL" "$codename" main || true
+              aptly mirror update -ignore-signatures "$MIRROR_NAME" || true
+              
+              # Create local repo and import from mirror
+              if ! aptly repo show "$REPO_NAME" >/dev/null 2>&1; then
+                aptly repo create -distribution="$codename" -component=main "$REPO_NAME"
+              fi
+              aptly repo import "$MIRROR_NAME" "$REPO_NAME" 'Name' || true
             else
-              desc="Apt repository for rspamd stable builds"
-            fi
-            {
-              printf '%s\n' "Origin: Rspamd"
-              printf '%s\n' "Label: Rspamd"
-              printf '%s\n' "Codename: ${codename}"
-              printf '%s\n' "Architectures: ${ARCHS}"
-              printf '%s\n' "Components: main"
-              printf '%s\n' "Description: ${desc}"
-              printf '%s\n' "SignWith: ${KEY_FPR}"
-              printf '\n'
-            } >> "$REPO_DIR/conf/distributions"
-            shopt -s nullglob
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*amd64*.deb; do
-              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-dbg_*amd64*.deb; do
-              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan_*amd64*.deb; do
-              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan-dbg_*amd64*.deb; do
-              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            # Include source
-            for deb_dsc in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*.dsc; do
-              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedsc "$codename" "$deb_dsc" || true
-            done
-            # Also include arm64 variants if present
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd_*arm64*.deb; do
-              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-dbg_*arm64*.deb; do
-              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan_*arm64*.deb; do
-              reprepro  -P extra -S mail -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-            for deb_pkg in "$GITHUB_WORKSPACE"/packages/${d}/rspamd-asan-dbg_*arm64*.deb; do
-              reprepro  -P extra -S debug -b "$REPO_DIR" -v --keepunreferencedfiles includedeb "$codename" "$deb_pkg"
-            done
-
-            # Retention: keep only the last N builds (by version) in indexes
-            keep_count="${KEEP_BUILDS:-10}"
-            if [[ "$keep_count" =~ ^[0-9]+$ ]] && (( keep_count > 0 )); then
-              mapfile -t all_versions < <(reprepro -b "$REPO_DIR" list "$codename" rspamd | awk '{print $NF}' | sort -u)
-              if (( ${#all_versions[@]} > keep_count )); then
-                versions_sorted=()
-                for v in "${all_versions[@]}"; do
-                  inserted=0
-                  for i in "${!versions_sorted[@]}"; do
-                    if dpkg --compare-versions "$v" gt "${versions_sorted[$i]}"; then
-                      versions_sorted=("${versions_sorted[@]:0:$i}" "$v" "${versions_sorted[@]:$i}")
-                      inserted=1
-                      break
-                    fi
-                  done
-                  if [[ $inserted -eq 0 ]]; then
-                    versions_sorted+=("$v")
-                  fi
-                done
-                keep_versions=("${versions_sorted[@]:0:$keep_count}")
-                declare -A keep_map
-                for kv in "${keep_versions[@]}"; do keep_map["$kv"]=1; done
-                mapfile -t pkgs < <(reprepro -b "$REPO_DIR" list "$codename" | sed -E 's/.*: ([^ ]+) .*/\1/' | grep '^rspamd' | sort -u)
-                for pkg in "${pkgs[@]}"; do
-                  mapfile -t pkg_versions < <(reprepro -b "$REPO_DIR" list "$codename" "$pkg" | awk '{print $NF}' | sort -u)
-                  for ver in "${pkg_versions[@]}"; do
-                    if [[ -z "${keep_map[$ver]:-}" ]]; then
-                      reprepro -b "$REPO_DIR" --keepunreferencedfiles removematched "$codename" "Package (== $pkg), Version (== $ver)" || true
-                    fi
-                  done
-                done
-                # Refresh indices after pruning
-                reprepro -b "$REPO_DIR" export "$codename"
+              echo "No existing published repo found for ${codename}, starting fresh"
+              if ! aptly repo show "$REPO_NAME" >/dev/null 2>&1; then
+                aptly repo create -distribution="$codename" -component=main "$REPO_NAME"
               fi
             fi
           done
-
-          # Build a minimal staging directory containing only indexed files to reduce upload size
-          STAGING_DIR="$GITHUB_WORKSPACE/repos_staging"
-          rm -rf "$STAGING_DIR"
-          mkdir -p "$STAGING_DIR"
-          # Copy indices and top-level artifacts
-          rsync -a "$REPO_DIR/dists/" "$STAGING_DIR/dists/" || true
-          if [[ -f "$REPO_DIR/rspamd.asc" ]]; then cp -f "$REPO_DIR/rspamd.asc" "$STAGING_DIR/"; fi
-          # Collect referenced files from indices
-          REFERENCED_LIST="$RUNNER_TEMP/referenced_list.txt"
-          : > "$REFERENCED_LIST"
-          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages" > /dev/null; then
-            grep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages | awk '{print $2}' | sort -u >> "$REFERENCED_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/binary-*/Packages.gz" > /dev/null; then
-            zgrep -h '^Filename: ' "$REPO_DIR"/dists/*/*/binary-*/Packages.gz | awk '{print $2}' | sort -u >> "$REFERENCED_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/source/Sources" > /dev/null; then
-            awk '/^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' \
-              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$REFERENCED_LIST" || true
-            awk '/^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' \
-              "$REPO_DIR"/dists/*/*/source/Sources | sort -u >> "$REFERENCED_LIST" || true
-          fi
-          if compgen -G "$REPO_DIR/dists/*/*/source/Sources.gz" > /dev/null; then
-            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
-              awk '/^Files:/{infiles=1;next} NF==0{infiles=0} infiles && NF>=3{print $3}' | sort -u >> "$REFERENCED_LIST" || true
-            zcat "$REPO_DIR"/dists/*/*/source/Sources.gz | \
-              awk '/^Checksums-Sha256:/{insha=1;next} NF==0{insha=0} insha && NF>=3{print $3}' | sort -u >> "$REFERENCED_LIST" || true
-          fi
-          # Copy referenced pool files into staging
-          while IFS= read -r rel; do
-            src="$REPO_DIR/$rel"
-            dest="$STAGING_DIR/$rel"
-            mkdir -p "$(dirname "$dest")"
-            if [[ -f "$src" ]]; then cp -f "$src" "$dest"; fi
-          done < "$REFERENCED_LIST"
-
-          # Upload repo
-          if [[ -n "${NIGHTLY:-}" ]]; then
-            TARGET_PATH="$TARGET_DEB_UNSTABLE"
-            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_UNSTABLE }}'
-          else
-            TARGET_PATH="$TARGET_DEB_STABLE"
-            RSYNC_KEY='${{ secrets.SSH_KEY_DEB_STABLE }}'
-          fi
-          mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-          KEYFILE="$HOME/.ssh/gh_publish_key"
-          echo "$RSYNC_KEY" > "$KEYFILE"
-          chmod 600 "$KEYFILE"
-          RSYNC_ARGS="-ru"
-          if [[ -z "${UPLOAD_HOST_KNOWN_HOSTS:-}" ]]; then
-            echo "Missing UPLOAD_HOST_KNOWN_HOSTS GitHub variable" >&2
-            exit 1
-          fi
-          printf '%s\n' "$UPLOAD_HOST_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
-          chmod 644 "$HOME/.ssh/known_hosts"
-          rsync -e "ssh -l ${{ secrets.SSH_USERNAME }} -i $KEYFILE -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes" $RSYNC_ARGS \
-            "$STAGING_DIR/" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}"
+          
+          # Process each distribution
+          IFS=',' read -ra DIST_LIST <<< "$DIST_NAMES"
+          for d in "${DIST_LIST[@]}"; do
+            codename="${d/ubuntu-/}"
+            codename="${codename/debian-/}"
+            REPO_NAME="rspamd-${codename}"
+            
+            # Create repo if it doesn't exist
+            if ! aptly repo show "$REPO_NAME" >/dev/null 2>&1; then
+              echo "Creating repository: $REPO_NAME"
+              aptly repo create -distribution="$codename" -component=main "$REPO_NAME"
+            fi
+            
+            # Check retention BEFORE adding new packages
+            # For each package type, see if we already have KEEP_BUILDS versions
+            for pkg_base in rspamd rspamd-asan rspamd-dbg rspamd-asan-dbg; do
+              # Get current count of versions for this package
+              count=$(aptly repo search "$REPO_NAME" "Name (= $pkg_base)" 2>/dev/null | wc -l || echo "0")
+              
+              if [ "$count" -ge "$KEEP_BUILDS" ]; then
+                # Need to remove oldest version(s) to make room
+                versions=$(aptly repo search "$REPO_NAME" "Name (= $pkg_base)" 2>/dev/null | \
+                  grep "^${pkg_base}_" | awk '{print $1}' | sed "s/${pkg_base}_//" | sort -V || true)
+                
+                # Remove oldest version (first in sorted list)
+                echo "$versions" | head -n $((count - KEEP_BUILDS + 1)) | while read old_version; do
+                  echo "Removing old version to make room: ${pkg_base} ${old_version}"
+                  aptly repo remove "$REPO_NAME" "Name (= $pkg_base), Version (= $old_version)" || true
+                done
+              fi
+            done
+            
+            # Now add new packages
+            shopt -s nullglob
+            for deb_pkg in "$GITHUB_WORKSPACE/packages/${d}"/*.deb; do
+              echo "Adding package: $deb_pkg"
+              aptly repo add -force-replace "$REPO_NAME" "$deb_pkg"
+            done
+            
+            # Publish or update
+            if aptly publish list 2>/dev/null | grep -q "$codename"; then
+              echo "Updating published repository: $codename"
+              aptly publish update -batch -passphrase="$GPG_PASSPHRASE" "$codename"
+            else
+              echo "Publishing repository: $codename"
+              aptly publish repo -batch -passphrase="$GPG_PASSPHRASE" \
+                -distribution="$codename" \
+                -origin="Rspamd" \
+                -label="Rspamd" \
+                -suite="" \
+                "$REPO_NAME"
+            fi
+          done
+          
+          # Export public key
+          mkdir -p "$APTLY_ROOT/public"
+          gpg --batch --armor --output "$APTLY_ROOT/public/rspamd.asc" --export "$KEY_FPR"
+          
+          # Upload published repos
+          rsync -e "ssh -l $SSH_USERNAME -i ~/.ssh/id_rsa -o StrictHostKeyChecking=yes" -rlptDv --delete \
+            "$APTLY_ROOT/public/" "${UPLOAD_HOST}:${UPLOAD_SUFFIX}${TARGET_PATH}/"
+      
