@@ -1,9 +1,9 @@
 local architectures = ['X64', 'ARM64'];
 
 local imagemap = {
-  'centos-8': 'rockylinux/rockylinux:8',
-  'centos-9': 'rockylinux/rockylinux:9',
-  'centos-10': 'rockylinux/rockylinux:10',
+  'centos-8': 'almalinux:8',
+  'centos-9': 'almalinux:9',
+  'centos-10': 'almalinux:10',
   'debian-bullseye': 'debian:bullseye',
   'debian-bookworm': 'debian:bookworm',
   'debian-trixie': 'debian:trixie',
@@ -24,14 +24,18 @@ local distribs_rpm = [
   if std.startsWith(key, 'centos-')
 ];
 
-local build_test_publish_pipeline = {
-  name: 'build_test_publish',
+local build_test_pipeline = {
+  name: 'build_test',
   on: {
     workflow_call: {
       inputs: {
-        nightly: {
-          required: false,
+        version: {
+          required: true,
           type: 'string',
+        },
+        experimental: {
+          required: false,
+          type: 'boolean',
         },
       },
     },
@@ -41,8 +45,9 @@ local build_test_publish_pipeline = {
 local build_test_jobs(name, image) = {
   local build_with(arch) = {
     name: name,
-    nightly: '${{ inputs.nightly }}',
     platform: arch,
+    version: '${{ inputs.version }}',
+    experimental: '${{ inputs.experimental }}',
   },
   [name + '-build-' + arch]: {
     uses: './.github/workflows/build_packages.yml',
@@ -57,51 +62,12 @@ local build_test_jobs(name, image) = {
     revision: '${{ needs.' + name + '-build-' + arch + '.outputs.revision }}',
   },
   [name + '-test-' + arch]: {
-    // Skip test job entirely if tests are disabled, regardless of publish intent
     'if': '${{ !(vars.SKIP_TESTS || vars.SKIP_TESTS_' + std.asciiUpper(std.strReplace(name, '-', '_')) + ') }}',
     needs: name + '-build-' + arch,
     uses: './.github/workflows/test_package.yml',
     with: test_with(arch),
   }
   for arch in architectures
-};
-
-local distribs_deb_test = [
-  '%s-test-%s' % [dist, arch]
-  for dist in distribs_deb
-  for arch in ['X64', 'ARM64']
-];
-
-local publish_debian = {
-  'debian-publish': {
-    // Run if publishing is enabled AND (tests were skipped OR all tests succeeded)
-    // always() ensures this runs even when test jobs are skipped
-    // !contains(needs.*.result, 'failure') ensures no test failed if they ran
-    'if': '${{ always() && !vars.SKIP_PUBLISH && !contains(needs.*.result, \'failure\') && !contains(needs.*.result, \'cancelled\') }}',
-    needs: distribs_deb_test,
-    uses: './.github/workflows/publish_deb.yml',
-    secrets: 'inherit',
-    with: {
-      names: std.join(',', distribs_deb),
-      nightly: '${{ inputs.nightly }}',
-    },
-  },
-};
-
-local publish_rpm(name) = {
-  [name + '-publish']: {
-    // Run if publishing is enabled AND (tests were skipped OR all tests succeeded)
-    // always() ensures this runs even when test jobs are skipped
-    // !contains(needs.*.result, 'failure') ensures no test failed if they ran
-    'if': '${{ always() && !vars.SKIP_PUBLISH && !vars.SKIP_PUBLISH_' + std.asciiUpper(std.strReplace(name, '-', '_')) + ' && !contains(needs.*.result, \'failure\') && !contains(needs.*.result, \'cancelled\') }}',
-    needs: [name + '-test-ARM64', name + '-test-X64'],
-    uses: './.github/workflows/publish_rpm.yml',
-    with: {
-      name: name,
-      nightly: '${{ inputs.nightly }}',
-    },
-    secrets: 'inherit',
-  },
 };
 
 local build_jobs_list = [
@@ -111,11 +77,9 @@ local build_jobs_list = [
 
 local all_jobs = {
   jobs:
-    std.foldl(std.mergePatch, build_jobs_list, {}) +
-    std.foldl(std.mergePatch, std.map(publish_rpm, distribs_rpm), {}) +
-    publish_debian,
+    std.foldl(std.mergePatch, build_jobs_list, {})
 };
 
 {
-  'build_test_publish.yml': build_test_publish_pipeline + all_jobs,
+  'build_test.yml': build_test_pipeline + all_jobs,
 }
