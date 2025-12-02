@@ -1,0 +1,85 @@
+local architectures = ['X64', 'ARM64'];
+
+local imagemap = {
+  'centos-8': 'almalinux:8',
+  'centos-9': 'almalinux:9',
+  'centos-10': 'almalinux:10',
+  'debian-bullseye': 'debian:bullseye',
+  'debian-bookworm': 'debian:bookworm',
+  'debian-trixie': 'debian:trixie',
+  'ubuntu-focal': 'ubuntu:20.04',
+  'ubuntu-jammy': 'ubuntu:22.04',
+  'ubuntu-noble': 'ubuntu:24.04',
+};
+
+local distribs_deb = [
+  key
+  for key in std.objectFields(imagemap)
+  if std.startsWith(key, 'debian-') || std.startsWith(key, 'ubuntu-')
+];
+
+local distribs_rpm = [
+  key
+  for key in std.objectFields(imagemap)
+  if std.startsWith(key, 'centos-')
+];
+
+local build_test_pipeline = {
+  name: 'build_test',
+  on: {
+    workflow_call: {
+      inputs: {
+        version: {
+          required: true,
+          type: 'string',
+        },
+        experimental: {
+          required: false,
+          type: 'boolean',
+        },
+      },
+    },
+  },
+};
+
+local build_test_jobs(name, image) = {
+  local build_with(arch) = {
+    name: name,
+    platform: arch,
+    version: '${{ inputs.version }}',
+    experimental: '${{ inputs.experimental }}',
+  },
+  [name + '-build-' + arch]: {
+    uses: './.github/workflows/build_packages.yml',
+    with: build_with(arch),
+  }
+  for arch in architectures
+} + {
+  local test_with(arch) = {
+    name: name,
+    image: image,
+    platform: arch,
+    revision: '${{ needs.' + name + '-build-' + arch + '.outputs.revision }}',
+  },
+  [name + '-test-' + arch]: {
+    'if': '${{ !(vars.SKIP_TESTS || vars.SKIP_TESTS_' + std.asciiUpper(std.strReplace(name, '-', '_')) + ') }}',
+    needs: name + '-build-' + arch,
+    uses: './.github/workflows/test_package.yml',
+    with: test_with(arch),
+  }
+  for arch in architectures
+};
+
+local build_jobs_list = [
+  build_test_jobs(p.key, p.value)
+  for p in std.objectKeysValues(imagemap)
+];
+
+local all_jobs = {
+  jobs:
+    std.foldl(std.mergePatch, build_jobs_list, {})
+};
+
+{
+  'build_test.yml': build_test_pipeline + all_jobs,
+}
