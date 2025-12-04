@@ -102,7 +102,7 @@ jobs:
 
           if [[ "${{ env.PKG_TYPE }}" == "deb" ]]; then
             export DEBIAN=1
-             if [ "${{ inputs.no_asan }}" == "true" ]; then
+            if [ "${{ inputs.no_asan }}" == "true" ]; then
                export DEB_BUILD_PROFILES="noasan"
              fi
           elif [[ "${{ env.PKG_TYPE }}" == "rpm" ]]; then
