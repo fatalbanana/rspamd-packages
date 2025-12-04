@@ -19,6 +19,10 @@ on:
         required: false
         type: boolean
         description: 'If true, build package for experimental repo (checkout master instead of tag)'
+      no_asan:
+        required: false
+        type: boolean
+        description: 'If true, skip building ASAN variants'
 
     outputs:
       revision:
@@ -87,7 +91,7 @@ jobs:
           export DOCKER_IMAGE=${{ inputs.name }}
           export DOCKER_REPO=ghcr.io/rspamd/rspamd-build-docker
           export LUAJIT=1
-          export PRESERVE_ENVVARS=LUAJIT,ASAN
+          export PRESERVE_ENVVARS=LUAJIT,ASAN,DEB_BUILD_PROFILES
           # Use $RELEASE_VERSION and $RSPAMD_VERSION from $GITHUB_ENV
           export RELEASE=$PACKAGE_VERSION
           export RPM=0
@@ -98,6 +102,9 @@ jobs:
 
           if [[ "${{ env.PKG_TYPE }}" == "deb" ]]; then
             export DEBIAN=1
+            if [ "${{ inputs.no_asan }}" == "true" ]; then
+               export DEB_BUILD_PROFILES="noasan"
+             fi
           elif [[ "${{ env.PKG_TYPE }}" == "rpm" ]]; then
             export RPM=1
           else
@@ -107,7 +114,7 @@ jobs:
 
           cd rspamd
           ../packpack/packpack
-          if [ $RPM -eq 1 ]; then
+          if [ $RPM -eq 1 ] && [ "${{ inputs.no_asan }}" != "true" ]; then
             export ASAN=1
             ../packpack/packpack
           fi
