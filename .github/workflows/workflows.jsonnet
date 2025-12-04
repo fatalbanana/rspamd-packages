@@ -37,6 +37,14 @@ local build_test_pipeline = {
           required: false,
           type: 'boolean',
         },
+        branch: {
+          required: false,
+          type: 'string',
+        },
+        repo: {
+          required: false,
+          type: 'string',
+        },
         distributions: {
           required: false,
           type: 'string',
@@ -71,6 +79,8 @@ local build_test_jobs(name, image) = {
     platform: arch,
     version: '${{ inputs.version }}',
     experimental: '${{ inputs.experimental }}',
+    branch: '${{ inputs.branch }}',
+    repo: '${{ inputs.repo }}',
     no_asan: '${{ inputs.no_asan }}',
   },
   [name + '-build-' + arch]: {
