@@ -18,7 +18,15 @@ on:
       experimental:
         required: false
         type: boolean
-        description: 'If true, build package for experimental repo (checkout master instead of tag)'
+        description: 'If true, build package for experimental repo (checkout branch instead of tag)'
+      branch:
+        required: false
+        type: string
+        description: 'Branch to checkout (only used for experimental builds)'
+      repo:
+        required: false
+        type: string
+        description: 'Repository to build from (owner/repo format)'
       no_asan:
         required: false
         type: boolean
@@ -49,9 +57,9 @@ jobs:
       - name: Check out rspamd
         uses: actions/checkout@v4
         with:
-          repository: rspamd/rspamd
+          repository: ${{ inputs.repo }}
           path: rspamd
-          ref: ${{ inputs.experimental && 'master' || env.RSPAMD_VERSION }}
+          ref: ${{ inputs.experimental && inputs.branch || env.RSPAMD_VERSION }}
 
       - name: Save commit hash
         id: save_commit

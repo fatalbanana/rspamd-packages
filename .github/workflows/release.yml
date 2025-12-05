@@ -6,9 +6,19 @@ on:
         description: 'Release version in format vX.Y.Z+N'
         required: true
       experimental:
-        description: 'If true, build from master but use provided version number'
+        description: 'If true, build from specified branch but use provided version number'
         required: false
         type: boolean
+      branch:
+        description: 'Branch to build from (only used for experimental builds)'
+        required: false
+        type: string
+        default: 'master'
+      repo:
+        description: 'Repository to build from (owner/repo format)'
+        required: false
+        type: string
+        default: 'rspamd/rspamd'
       distributions:
         description: 'Distributions to build - comma-separated list (e.g., centos-9,debian-trixie). Leave empty to build all.'
         required: false
@@ -39,6 +49,8 @@ jobs:
     with:
       version: ${{ github.event.inputs.version }}
       experimental: ${{ github.event.inputs.experimental == 'true' }}
+      branch: ${{ github.event.inputs.branch }}
+      repo: ${{ github.event.inputs.repo }}
       distributions: ${{ github.event.inputs.distributions }}
       architectures: ${{ github.event.inputs.architectures }}
       no_asan: ${{ github.event.inputs.no_asan == 'true' }}

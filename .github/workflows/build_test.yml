@@ -4,10 +4,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-10'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-10",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -15,10 +17,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-10'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-10",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -48,10 +52,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-8'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-8",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -59,10 +65,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-8'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-8",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -92,10 +100,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-9'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-9",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -103,10 +113,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'centos-9'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "centos-9",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -136,10 +148,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-bookworm'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-bookworm",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -147,10 +161,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-bookworm'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-bookworm",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -180,10 +196,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-bullseye'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-bullseye",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -191,10 +209,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-bullseye'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-bullseye",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -224,10 +244,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-trixie'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-trixie",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -235,10 +257,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'debian-trixie'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "debian-trixie",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -268,10 +292,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-focal",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -279,10 +305,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-focal",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -312,10 +340,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-jammy'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-jammy",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -323,10 +353,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-jammy'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-jammy",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -356,10 +388,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-noble'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-noble",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "ARM64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -367,10 +401,12 @@
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-noble'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",
          "with": {
+            "branch": "${{ inputs.branch }}",
             "experimental": "${{ inputs.experimental }}",
             "name": "ubuntu-noble",
             "no_asan": "${{ inputs.no_asan }}",
             "platform": "X64",
+            "repo": "${{ inputs.repo }}",
             "version": "${{ inputs.version }}"
          }
       },
@@ -405,6 +441,10 @@
                "required": false,
                "type": "string"
             },
+            "branch": {
+               "required": false,
+               "type": "string"
+            },
             "distributions": {
                "required": false,
                "type": "string"
@@ -416,6 +456,10 @@
             "no_asan": {
                "required": false,
                "type": "boolean"
+            },
+            "repo": {
+               "required": false,
+               "type": "string"
             },
             "version": {
                "required": true,
