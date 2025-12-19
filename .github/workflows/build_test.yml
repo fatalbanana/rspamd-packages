@@ -288,54 +288,6 @@
             "revision": "${{ needs.debian-trixie-build-X64.outputs.revision }}"
          }
       },
-      "ubuntu-focal-build-ARM64": {
-         "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
-         "uses": "./.github/workflows/build_packages.yml",
-         "with": {
-            "branch": "${{ inputs.branch }}",
-            "experimental": "${{ inputs.experimental }}",
-            "name": "ubuntu-focal",
-            "no_asan": "${{ inputs.no_asan }}",
-            "platform": "ARM64",
-            "repo": "${{ inputs.repo }}",
-            "version": "${{ inputs.version }}"
-         }
-      },
-      "ubuntu-focal-build-X64": {
-         "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) }}",
-         "uses": "./.github/workflows/build_packages.yml",
-         "with": {
-            "branch": "${{ inputs.branch }}",
-            "experimental": "${{ inputs.experimental }}",
-            "name": "ubuntu-focal",
-            "no_asan": "${{ inputs.no_asan }}",
-            "platform": "X64",
-            "repo": "${{ inputs.repo }}",
-            "version": "${{ inputs.version }}"
-         }
-      },
-      "ubuntu-focal-test-ARM64": {
-         "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) && !(vars.SKIP_TESTS || vars.SKIP_TESTS_UBUNTU_FOCAL) }}",
-         "needs": "ubuntu-focal-build-ARM64",
-         "uses": "./.github/workflows/test_package.yml",
-         "with": {
-            "image": "ubuntu:20.04",
-            "name": "ubuntu-focal",
-            "platform": "ARM64",
-            "revision": "${{ needs.ubuntu-focal-build-ARM64.outputs.revision }}"
-         }
-      },
-      "ubuntu-focal-test-X64": {
-         "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-focal'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'X64'))) && !(vars.SKIP_TESTS || vars.SKIP_TESTS_UBUNTU_FOCAL) }}",
-         "needs": "ubuntu-focal-build-X64",
-         "uses": "./.github/workflows/test_package.yml",
-         "with": {
-            "image": "ubuntu:20.04",
-            "name": "ubuntu-focal",
-            "platform": "X64",
-            "revision": "${{ needs.ubuntu-focal-build-X64.outputs.revision }}"
-         }
-      },
       "ubuntu-jammy-build-ARM64": {
          "if": "${{ (inputs.distributions == '' || contains(format(',{0},', inputs.distributions), format(',{0},', 'ubuntu-jammy'))) && (inputs.architectures == '' || contains(format(',{0},', inputs.architectures), format(',{0},', 'ARM64'))) }}",
          "uses": "./.github/workflows/build_packages.yml",

@@ -7,7 +7,6 @@ local imagemap = {
   'debian-bullseye': 'debian:bullseye',
   'debian-bookworm': 'debian:bookworm',
   'debian-trixie': 'debian:trixie',
-  'ubuntu-focal': 'ubuntu:20.04',
   'ubuntu-jammy': 'ubuntu:22.04',
   'ubuntu-noble': 'ubuntu:24.04',
 };
